@@ -3,7 +3,7 @@ import { User } from "@/models/User";
 import { compare } from "bcryptjs";
 import Github from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
-import NextAuth, { CredentialsSignin } from "next-auth";
+import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -22,91 +22,60 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-
       authorize: async (credentials) => {
-        const email = credentials.email as string | undefined;
-        const password = credentials.password as string | undefined;
+        const { email, password } = credentials || {};
 
         if (!email || !password) {
-          throw new CredentialsSignin("Please provide email and password");
+          throw new Error("Please provide email and password");
         }
 
         await connectDB();
-
         const user = await User.findOne({ email });
-        console.log(user);
-        if (!user) {
+        if (
+          !user ||
+          !user.password ||
+          !(await compare(password, user.password))
+        ) {
           throw new Error("Invalid email or password");
         }
 
-        if (!user.password) {
-          console.log(password);
-          throw new Error("Invalid password");
-        }
-
-        const isMatched = await compare(password, user.password);
-        console.log(password, user.password, isMatched);
-
-        if (!isMatched) {
-          throw new Error("Password didn't match");
-        }
-
-        const userData = {
-          id: user._id,
-          firstname: user.firstname,
-          lastname: user.lastname,
-
-          email: user.email,
-          role: user.role,
-        };
-
-        return userData;
+        const { _id, firstname, lastname, role } = user;
+        return { id: _id, firstname, lastname, email, role };
       },
     }),
   ],
-
   pages: {
     signIn: "/login",
   },
-
   callbacks: {
-    async session({ session, token }) {
+    session: async ({ session, token }) => {
       if (token?.sub && token?.role) {
         session.user.id = token.sub;
         session.user.role = token.role;
       }
       return session;
     },
-
-    async jwt({ token, user }) {
+    jwt: async ({ token, user }) => {
       if (user) {
         token.role = user.role;
       }
       return token;
     },
-
     signIn: async ({ user, account }) => {
       if (account?.provider === "google") {
-        try {
-          const { email, name, image, id } = user;
-          await connectDB();
-          const alreadyUser = await User.findOne({ email });
+        await connectDB();
+        const alreadyUser = await User.findOne({ email: user.email });
 
-          if (!alreadyUser) {
-            await User.create({ email, name, image, authProviderId: id });
-          } else {
-            return true;
-          }
-        } catch (error) {
-          throw new Error("Error while creating user");
+        if (!alreadyUser) {
+          await User.create({
+            email: user.email,
+            name: user.name,
+            image: user.image,
+            authProviderId: user.id,
+          });
         }
       }
-
-      if (account?.provider === "credentials") {
-        return true;
-      } else {
-        return false;
-      }
+      return true;
     },
   },
 });
